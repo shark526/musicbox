@@ -23,7 +23,7 @@ import signal
 import webbrowser
 import locale
 import xml.etree.cElementTree as ET
-
+from . import global_var as gv
 
 from .api import NetEase
 from .player import Player
@@ -35,6 +35,69 @@ from .utils import notify
 from .storage import Storage
 from .cache import Cache
 from . import logger
+##added GPIO part start##
+import RPi.GPIO as GPIO
+import time
+from subprocess import call
+GPIO.setmode(GPIO.BCM)
+#BCM
+pin_start=4#7
+pin_next=25#6
+pin_previous=24#5
+
+GPIO.setup(pin_start,GPIO.IN,pull_up_down=GPIO.PUD_DOWN)
+GPIO.setup(pin_next,GPIO.IN,pull_up_down=GPIO.PUD_DOWN)
+GPIO.setup(pin_previous,GPIO.IN,pull_up_down=GPIO.PUD_DOWN)
+
+
+
+enableGPIO = True#False
+
+#GPIOInputed = False
+def resetInputPinStatus():
+    gv.GPIOInputPin = 0
+    gv.GPIOInputed = False
+    gv.GPIOLongPress = False
+    gv.GPIOLongLongPress = False
+    gv.start = 0
+    gv.end = 0
+    
+
+def my_callback(channel):
+    #log.debug(str(channel) + "-pressed")
+    if GPIO.input(channel)==1:
+        log.debug(gv.GPIOInputPin)
+        gv.GPIOInputPin = channel
+        gv.start = time.time()
+        
+    if GPIO.input(channel)==0:
+        gv.end = time.time()
+        log.debug(str(channel) + "-released with pin" + str(gv.GPIOInputPin))
+        if(gv.GPIOInputPin==channel):
+            elapsed = int(gv.end - gv.start)
+            gv.start=0
+            gv.end=0
+            log.debug(str(elapsed) + "-elapsed")
+            if elapsed>=6:
+                gv.GPIOLongLongPress = True
+                log.debug("!!longlong press " + str(gv.GPIOInputPin))
+            elif elapsed>=3:
+                gv.GPIOLongPress = True
+                log.debug("!!long press " + str(gv.GPIOInputPin))
+            else:
+                gv.GPIOLongLongPress = False
+                gv.GPIOLongPress = False
+                log.debug("!!short press " + str(gv.GPIOInputPin))
+            gv.GPIOInputed = True
+            log.debug("[confirmed]")
+    
+        
+GPIO.add_event_detect(pin_start,GPIO.BOTH,callback=my_callback,bouncetime=200)
+GPIO.add_event_detect(pin_next,GPIO.BOTH,callback=my_callback,bouncetime=200)
+GPIO.add_event_detect(pin_previous,GPIO.BOTH,callback=my_callback,bouncetime=200)
+
+##added GPIO part end##
+
 
 
 locale.setlocale(locale.LC_ALL, '')
@@ -109,6 +172,7 @@ class Menu(object):
         self.title = '网易云音乐'
         self.datalist = ['排行榜', '艺术家', '新碟上架', '精选歌单', '我的歌单', '主播电台', '每日推荐',
                          '私人FM', '搜索', '帮助']
+        self.initialed = False
         self.offset = 0
         self.index = 0
         self.storage = Storage()
@@ -210,6 +274,67 @@ class Menu(object):
             keybinder.unbind(self.config.get_item('global_play_pause'))  # noqa
             keybinder.unbind(self.config.get_item('global_next'))  # noqa
             keybinder.unbind(self.config.get_item('global_previous'))  # noqa
+    def checkGPIO(self, curkey):
+ 
+        #pin_start=17
+        #pin_next=7
+        #pin_previous=27
+
+        #if GPIO inputed, select the toplists(idx=0)
+        # GPIO input:
+        #1: play/pause
+        #2: next shot press:next song, long press: next toplist
+        #3: previous
+        #4: shuffle
+        #5: vol+
+        #6: vol-
+
+        #log.debug(curkey)
+        #initial menu direct to top list
+        
+        if  self.initialed == False:          
+            if self.datatype=='main':
+                curkey = ord('0')
+            if self.datatype=='toplists':
+                curkey = ord('6') #US billboard                        
+                self.initialed = True
+        if gv.GPIOInputed:
+            if self.datatype == 'songs':
+                if gv.GPIOInputPin == pin_start:
+                    
+                    if gv.GPIOLongLongPress:
+                        log.debug("quiting...")
+                        curkey = ord('q')#quit
+                    elif gv.GPIOLongPress:
+                        curkey = ord('P')#change play mode
+                    curkey = ord(' ')    
+                elif gv.GPIOInputPin == pin_next:
+                    if gv.GPIOLongLongPress:
+                        curkey = ord('m')
+                        self.initialed = False
+                        #TODO: save current position into self.toplistPosition
+                        #get current position of toplist then increse 1
+                        #caution out of index
+                    elif gv.GPIOLongPress:
+                        curkey = ord(']')
+                    else:
+                        curkey = ord('+')
+                elif gv.GPIOInputPin == pin_previous:
+                    if gv.GPIOLongLongPress:
+                        curkey = ord('m')
+                        self.initialed = False
+                        #get current position of toplist then decrece 1
+                        #caution out of index
+                    elif gv.GPIOLongPress:
+                        curkey = ord('[')
+                    else:
+                        curkey = ord('-')
+
+            resetInputPinStatus()
+            
+        
+
+	return curkey
 
     def start(self):
         self.START = time.time() // 1
@@ -222,7 +347,7 @@ class Menu(object):
         self.stack.append([self.datatype, self.title, self.datalist, self.offset, self.index])
 
         self.bind_keys()  # deprecated keybinder
-        show_lyrics_new_process()
+        #show_lyrics_new_process()
         while True:
             datatype = self.datatype
             title = self.title
@@ -231,20 +356,34 @@ class Menu(object):
             idx = index = self.index
             step = self.step
             stack = self.stack
-            self.screen.timeout(500)
+            self.screen.timeout(300)
             key = self.screen.getch()
             if BINDABLE:
                 keybinder.gtk.main_iteration(False)  # noqa
             self.ui.screen.refresh()
 
-            # term resize
+            #log.debug("===============")
+            #log.debug(key)
+            #log.debug(self.datatype)
+
+	    # term resize
             if key == -1:
+                self.ui.update_size()
                 self.player.update_size()
 
             # 退出
             if key == ord('q'):
                 self.unbind_keys()
                 break
+
+##########################
+            try:
+                if enableGPIO:
+                    key=self.checkGPIO(key)
+            except Exception,e:
+                log.error(e)
+                
+
 
             # 退出并清除用户信息
             if key == ord('w'):
@@ -257,7 +396,8 @@ class Menu(object):
                 try:
                     os.remove(self.storage.cookie_path)
                 except OSError as e:
-                    log.error(e)
+
+                    (e)
                     break
                 break
 
@@ -378,9 +518,9 @@ class Menu(object):
                                                self.player.get_playing_id())
                 if return_data != -1:
                     song_name = self.player.get_playing_name()
-                    notify('%s added successfully!' % song_name, 0)
+                    notify('Added: %s successfully!' % song_name, 0)
                 else:
-                    notify('Adding song failed!', 0)
+                    notify('Existing song!', 0)
 
             # 删除FM
             elif key == ord('.'):
@@ -409,13 +549,14 @@ class Menu(object):
             elif key == ord(' '):
                 # If not open a new playing list, just play and pause.
                 try:
-                    if isinstance(self.datalist[idx], dict) and self.datalist[idx]['song_id'] == self.player.playing_id:
-                        self.player.play_and_pause(self.storage.database['player_info']['idx'])
+                    if self.datalist[idx]['song_id'] == self.player.playing_id:
+                        self.player.play_and_pause(self.storage.database[
+                            'player_info']['idx'])
                         time.sleep(0.1)
                         continue
                 except (TypeError, KeyError) as e:
                     log.error(e)
-
+                    pass
                 # If change to a new playing list. Add playing list and play.
                 if datatype == 'songs':
                     self.resume_play = False
@@ -440,7 +581,8 @@ class Menu(object):
                     self.player.play_and_pause(idx)
                     self.at_playing_list = True
                 else:
-                    self.player.play_and_pause(self.storage.database['player_info']['idx'])
+                    self.player.play_and_pause(self.storage.database[
+                        'player_info']['idx'])
                 time.sleep(0.1)
 
             # 加载当前播放列表
@@ -590,7 +732,7 @@ class Menu(object):
         self.cache.quit()
         self.storage.save()
         curses.endwin()
-
+        GPIO.cleanup()
     def dispatch_enter(self, idx):
         # The end of stack
         netease = self.netease
