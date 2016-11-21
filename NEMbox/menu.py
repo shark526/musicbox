@@ -78,10 +78,10 @@ def my_callback(channel):
             gv.start=0
             gv.end=0
             log.debug(str(elapsed) + "-elapsed")
-            if elapsed>=6:
+            if elapsed>=4:
                 gv.GPIOLongLongPress = True
                 log.debug("!!longlong press " + str(gv.GPIOInputPin))
-            elif elapsed>=3:
+            elif elapsed>=2:
                 gv.GPIOLongPress = True
                 log.debug("!!long press " + str(gv.GPIOInputPin))
             else:
@@ -91,10 +91,6 @@ def my_callback(channel):
             gv.GPIOInputed = True
             log.debug("[confirmed]")
     
-        
-GPIO.add_event_detect(pin_start,GPIO.BOTH,callback=my_callback,bouncetime=200)
-GPIO.add_event_detect(pin_next,GPIO.BOTH,callback=my_callback,bouncetime=200)
-GPIO.add_event_detect(pin_previous,GPIO.BOTH,callback=my_callback,bouncetime=200)
 
 ##added GPIO part end##
 
@@ -173,6 +169,9 @@ class Menu(object):
         self.datalist = ['排行榜', '艺术家', '新碟上架', '精选歌单', '我的歌单', '主播电台', '每日推荐',
                          '私人FM', '搜索', '帮助']
         self.initialed = False
+        self.toplistPosition = 0
+        self.GPIOtopList = ['6','0','5','1','9','7','3']
+        self.isJumpingNextList = False
         self.offset = 0
         self.index = 0
         self.storage = Storage()
@@ -274,6 +273,8 @@ class Menu(object):
             keybinder.unbind(self.config.get_item('global_play_pause'))  # noqa
             keybinder.unbind(self.config.get_item('global_next'))  # noqa
             keybinder.unbind(self.config.get_item('global_previous'))  # noqa
+
+        
     def checkGPIO(self, curkey):
  
         #pin_start=17
@@ -291,40 +292,58 @@ class Menu(object):
 
         #log.debug(curkey)
         #initial menu direct to top list
-        
-        if  self.initialed == False:          
-            if self.datatype=='main':
-                curkey = ord('0')
-            if self.datatype=='toplists':
-                curkey = ord('6') #US billboard                        
+       
+        if  self.initialed == False:
+            if not self._is_playlist_empty() and not self.isJumpingNextList:
+                curkey = ord('p')
                 self.initialed = True
+            else:
+                if self.datatype=='main':
+                    curkey = ord('0')
+                if self.datatype=='toplists':
+                    curkey = ord(self.GPIOtopList[self.toplistPosition])# ord('6') #US billboard
+                if self.datatype == 'songs':
+                    curkey = ord(' ')
+                    self.initialed = True
+                    self.isJumpingNextList = False
+                    log.debug("init GPIO menu-" + str(self.toplistPosition))
         if gv.GPIOInputed:
             if self.datatype == 'songs':
-                if gv.GPIOInputPin == pin_start:
-                    
+                if gv.GPIOInputPin == pin_start:                    
                     if gv.GPIOLongLongPress:
-                        log.debug("quiting...")
                         curkey = ord('q')#quit
+                        log.debug("quiting...")
                     elif gv.GPIOLongPress:
                         curkey = ord('P')#change play mode
-                    curkey = ord(' ')    
+                        log.debug("chage mode")
+                    else:
+                        curkey = ord(' ')
+                        log.debug("play-stop")
                 elif gv.GPIOInputPin == pin_next:
                     if gv.GPIOLongLongPress:
-                        curkey = ord('m')
-                        self.initialed = False
                         #TODO: save current position into self.toplistPosition
                         #get current position of toplist then increse 1
                         #caution out of index
+                        curkey = ord('m')
+                        self.toplistPosition += 1
+                        if self.toplistPosition > len(self.GPIOtopList):
+                            self.toplistPosition = 0
+                        self.initialed = False
+                        self.isJumpingNextList = True
+                        log.debug("next toplist..." + str(self.toplistPosition))
                     elif gv.GPIOLongPress:
                         curkey = ord(']')
+                        log.debug("next song")            
                     else:
-                        curkey = ord('+')
+                        curkey = ord('=')
                 elif gv.GPIOInputPin == pin_previous:
                     if gv.GPIOLongLongPress:
                         curkey = ord('m')
+                        self.toplistPosition -= 1
+                        if self.toplistPosition < 0:
+                            self.toplistPosition = len(self.GPIOtopList)-1
                         self.initialed = False
-                        #get current position of toplist then decrece 1
-                        #caution out of index
+                        self.isJumpingNextList = True
                     elif gv.GPIOLongPress:
                         curkey = ord('[')
                     else:
@@ -337,6 +356,12 @@ class Menu(object):
 	return curkey
 
     def start(self):
+        
+        GPIO.add_event_detect(pin_start,GPIO.BOTH,callback=my_callback,bouncetime=200)
+        GPIO.add_event_detect(pin_next,GPIO.BOTH,callback=my_callback,bouncetime=200)
+        GPIO.add_event_detect(pin_previous,GPIO.BOTH,callback=my_callback,bouncetime=200)
+
+
         self.START = time.time() // 1
         self.ui.build_menu(self.datatype, self.title, self.datalist,
                            self.offset, self.index, self.step, self.START)
@@ -371,18 +396,19 @@ class Menu(object):
                 self.ui.update_size()
                 self.player.update_size()
 
-            # 退出
-            if key == ord('q'):
-                self.unbind_keys()
-                break
-
 ##########################
             try:
                 if enableGPIO:
                     key=self.checkGPIO(key)
             except Exception,e:
                 log.error(e)
+
                 
+            # 退出
+            if key == ord('q'):
+                self.unbind_keys()
+                break
+
 
 
             # 退出并清除用户信息
@@ -732,7 +758,7 @@ class Menu(object):
         self.cache.quit()
         self.storage.save()
         curses.endwin()
-        GPIO.cleanup()
+        #GPIO.cleanup()
     def dispatch_enter(self, idx):
         # The end of stack
         netease = self.netease
